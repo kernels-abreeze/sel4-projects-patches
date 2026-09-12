@@ -1,0 +1,132 @@
+From 6a439fed0563d084f7db98455d3b56d374f194eb Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Wed, 26 Mar 2025 20:15:02 -0400
+Subject: [PATCH] Add Ultra96V2 support
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+Signed-off-by: Ivan-Velickovic <i.velickovic@unsw.edu.au>
+---
+ README.md           |  1 +
+ build_sdk.py        | 15 +++++++++++++++
+ docs/manual.md      | 11 +++++++++++
+ loader/src/loader.c | 23 ++++++++++++++++++++---
+ 4 files changed, 47 insertions(+), 3 deletions(-)
+
+diff --git a/README.md b/README.md
+index 47d1f5c..5c05f18 100644
+--- a/README.md
++++ b/README.md
+@@ -220,6 +220,7 @@ The currently supported boards are:
+ * rpi4b_1gb
+ * star64
+ * tqma8xqp1gb
++* ultra96v2
+ * zcu102
+ 
+ The currently supported configurations are:
+diff --git a/build_sdk.py b/build_sdk.py
+index dc594db..0bbbf0e 100644
+--- a/build_sdk.py
++++ b/build_sdk.py
+@@ -195,6 +195,21 @@ SUPPORTED_BOARDS = (
+             "KernelAllowSMCCalls": True,
+         },
+     ),
++    BoardInfo(
++        name="ultra96v2",
++        arch=KernelArch.AARCH64,
++        gcc_cpu="cortex-a53",
++        loader_link_address=0x40000000,
++        kernel_options={
++            "KernelPlatform": "zynqmp",
++            "KernelARMPlatform": "ultra96v2",
++            "KernelIsMCS": True,
++            "KernelArmExportPCNTUser": True,
++            "KernelArmHypervisorSupport": True,
++            "KernelArmVtimerUpdateVOffset": False,
++            "KernelAllowSMCCalls": True,
++        },
++    ),
+     BoardInfo(
+         name="qemu_virt_aarch64",
+         arch=KernelArch.AARCH64,
+diff --git a/docs/manual.md b/docs/manual.md
+index ce59e6c..4801362 100644
+--- a/docs/manual.md
++++ b/docs/manual.md
+@@ -1044,6 +1044,17 @@ Rather than typing these each time you can create a U-Boot script:
+ 
+ When debugging is enabled the kernel will use the same UART as U-Boot.
+ 
++## Ultra96V2
++
++To run the built image on the board, you have to use properly patched U-Boot - please see the section for ZCU102, for the details.
++
++You have to load the binary file into memory and run it:
++```
++ZynqMP> tftpboot 0x40000000 loader.img
++...
++ZynqMP> go 0x40000000
++```
++
+ ## ZCU102
+ 
+ The ZCU102 can run on a physical board or on an appropriate QEMU based emulator.
+diff --git a/loader/src/loader.c b/loader/src/loader.c
+index b2348c3..eeeb266 100644
+--- a/loader/src/loader.c
++++ b/loader/src/loader.c
+@@ -28,7 +28,7 @@ _Static_assert(sizeof(uintptr_t) == 8 || sizeof(uintptr_t) == 4, "Expect uintptr
+ 
+ #define UART_REG(x) ((volatile uint32_t *)(UART_BASE + (x)))
+ 
+-#if defined(BOARD_zcu102)
++#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2)
+ #define GICD_BASE 0x00F9010000UL
+ #define GICC_BASE 0x00F9020000UL
+ #elif defined(BOARD_qemu_virt_aarch64)
+@@ -240,6 +240,23 @@ static void putc(uint8_t ch)
+     while ((*UART_REG(UART_STATUS) & UART_TX_FULL));
+     *UART_REG(UART_WFIFO) = ch;
+ }
++#elif defined(BOARD_ultra96v2)
++/* Use UART1 available through USB-to-JTAG/UART pod */
++#define UART_BASE 0x00ff010000
++#define R_UART_CHANNEL_STS          0x2C
++#define UART_CHANNEL_STS_TXEMPTY    0x08
++#define UART_CHANNEL_STS_TACTIVE    0x800
++#define R_UART_TX_RX_FIFO           0x30
++
++static void uart_init(void) {}
++
++static void putc(uint8_t ch)
++{
++    while (!(*UART_REG(R_UART_CHANNEL_STS) & UART_CHANNEL_STS_TXEMPTY)) {};
++    while (*UART_REG(R_UART_CHANNEL_STS) & UART_CHANNEL_STS_TACTIVE) {};
++
++    *((volatile uint32_t *)(UART_BASE + R_UART_TX_RX_FIFO)) = ch;
++}
+ #elif defined(BOARD_qemu_virt_aarch64)
+ #define UART_BASE                 0x9000000
+ #define PL011_TCR                 0x030
+@@ -639,7 +656,7 @@ static void start_kernel(void)
+     );
+ }
+ 
+-#if defined(BOARD_zcu102) || defined(BOARD_qemu_virt_aarch64)
++#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2) || defined(BOARD_qemu_virt_aarch64)
+ static void configure_gicv2(void)
+ {
+     /* The ZCU102 start in EL3, and then we drop to EL1(NS).
+@@ -746,7 +763,7 @@ int main(void)
+      */
+     copy_data();
+ 
+-#if defined(BOARD_zcu102) || defined(BOARD_qemu_virt_aarch64)
++#if defined(BOARD_zcu102) || defined(BOARD_ultra96v2) || defined(BOARD_qemu_virt_aarch64)
+     configure_gicv2();
+ #endif
+ 
+-- 
+2.34.1
+

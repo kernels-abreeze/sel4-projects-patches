@@ -1,0 +1,294 @@
+From 7ff9a467d97c8aa4b6be42fbb04dc5c4ad88acdc Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Mon, 9 May 2022 17:26:06 -0400
+Subject: [PATCH] bench/signal: improve early processing loop
+
+Measurement loop for early processing was improved. The bitmask array
+was replaced with a single variable.
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+---
+ apps/sel4bench/src/math.c                     | 30 +++-------
+ apps/sel4bench/src/math.h                     | 21 ++++++-
+ apps/sel4bench/src/processing.c               |  5 +-
+ apps/sel4bench/src/processing.h               | 12 +++-
+ apps/sel4bench/src/signal.c                   |  4 +-
+ apps/signal/src/main.c                        | 58 ++++---------------
+ .../include/sel4benchsupport/signal.h         | 12 ++--
+ 7 files changed, 55 insertions(+), 87 deletions(-)
+
+diff --git a/apps/sel4bench/src/math.c b/apps/sel4bench/src/math.c
+index 8fe7305..110c07f 100644
+--- a/apps/sel4bench/src/math.c
++++ b/apps/sel4bench/src/math.c
+@@ -155,42 +155,28 @@ result_t calculate_results(const size_t n, ccnt_t data[n])
+     return result;
+ }
+ 
+-
+-static double results_variance_early_proc(const size_t n, const ccnt_t sum, const ccnt_t sum2, const ccnt_t mean)
++static double results_variance_early_proc(const size_t num, const ccnt_t sum,
++                                          const ccnt_t sum2, const ccnt_t mean)
+ {
+     long double variance = 0;
+     long double dm = mean, dsum = sum, dsum2 = sum2;
+ 
+-    /* sigma = ( sum(x^2) - 2m*sum(x) + n*m^2 ) / n */
++    /* sigma = ( sum(x^2) - 2m*sum(x) + n*m^2 ) / num */
+ 
+-    variance = (dsum2 - 2 * dm * dsum + n * dm * dm) / n;
++    variance = (dsum2 - 2 * dm * dsum + num * dm * dm) / num;
+ 
+     return variance;
+ }
+ 
+-
+-/*
+- * received data:
+- * data[0] - min
+- * data[1] - max
+- * data[2] - sum of samples
+- * data[3] - sum of squared samples
+- * array[num] -  raw data array, has to be fed to printing function
+- */
+-result_t calculate_results_early_proc(ccnt_t num, ccnt_t min, ccnt_t max, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
++result_t calculate_results_early_proc(ccnt_t num, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
+ {
+ 
+     result_t result;
+-    result.min = min;
+-    result.max = max;
+-    assert(result.min <= result.max);
++
++    memset((void *)&result, 0, sizeof(result));
+     result.mean = sum / num;
+     result.variance = results_variance_early_proc(num, sum, sum2, result.mean);
+-    result.stddev = sqrt(result.variance * ((double) num / (double)(num - 1.0f)));
+-    result.median = 0;
+-    result.first_quantile = 0;
+-    result.third_quantile = 0;
+-    result.mode = 0;
++    result.stddev = sqrt(result.variance * ((double) num / (double)(num - 1.0f)));;
+     result.raw_data = array;
+     result.samples = num;
+ 
+diff --git a/apps/sel4bench/src/math.h b/apps/sel4bench/src/math.h
+index cc5fe16..d59f83c 100644
+--- a/apps/sel4bench/src/math.h
++++ b/apps/sel4bench/src/math.h
+@@ -10,8 +10,23 @@
+ 
+ result_t calculate_results(const size_t n, ccnt_t data[n]);
+ 
+-result_t calculate_results_early_proc(ccnt_t num, ccnt_t min, ccnt_t max,
+-                                      ccnt_t sum, ccnt_t sum2, ccnt_t array[num]);
++/*
++ * The function calculates parameters of array elements received from
++ * a benchmark which used early processing methodology
++ * @param num - number of samples
++ * @param sum - sum of samples
++ * @param sum2 - sum of squared samples
++ * @param array - array of raw data which are zeros for Early Processing methodology
++ * but the array is required for results output function
++ */
++result_t calculate_results_early_proc(ccnt_t num, ccnt_t sum, ccnt_t sum2,
++                                      ccnt_t array[num]);
+ 
+-static double results_variance_early_proc(const size_t n, const ccnt_t sum,
++/* The function calculates variance using sum, sum of squared values and mean
++ * @param num - number of samples
++ * @param sum - sum of samples
++ * @param sum2 - sum of squared samples
++ * @param mean - mean of the samples
++*/
++static double results_variance_early_proc(const size_t num, const ccnt_t sum,
+                                           const ccnt_t sum2, const ccnt_t mean);
+diff --git a/apps/sel4bench/src/processing.c b/apps/sel4bench/src/processing.c
+index 82a6c16..f606b8e 100644
+--- a/apps/sel4bench/src/processing.c
++++ b/apps/sel4bench/src/processing.c
+@@ -63,10 +63,9 @@ result_t process_result(size_t n, ccnt_t array[n], result_desc_t desc)
+     return calculate_results(size, array);
+ }
+ 
+-/* For Early Processing configuration */
+-result_t process_result_early_proc(ccnt_t num, ccnt_t min, ccnt_t max, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
++result_t process_result_early_proc(ccnt_t num, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
+ {
+-    return calculate_results_early_proc(num, min, max, sum, sum2, array);
++    return calculate_results_early_proc(num, sum, sum2, array);
+ }
+ 
+ void process_results(size_t ncols, size_t nrows, ccnt_t array[ncols][nrows], result_desc_t desc,
+diff --git a/apps/sel4bench/src/processing.h b/apps/sel4bench/src/processing.h
+index d51e9c0..ac3d2e7 100644
+--- a/apps/sel4bench/src/processing.h
++++ b/apps/sel4bench/src/processing.h
+@@ -17,9 +17,15 @@
+  */
+ result_t process_result(size_t n, ccnt_t array[n], result_desc_t desc);
+ 
+-/*  For Early Processing configuration  */
+-result_t process_result_early_proc(ccnt_t num, ccnt_t min, ccnt_t max,
+-                                   ccnt_t sum, ccnt_t sum2, ccnt_t array[num]);
++/* Compute the variance, standard deviation, mean for a set of values
++ * for benchmarks using Early Processing methodology
++ * @param num   number of values to process
++ * @param sum   sum of values
++ * @param sum2  sum of squared values
++ * @param array raw values to compute results for
++ */
++result_t process_result_early_proc(ccnt_t num, ccnt_t sum, ccnt_t sum2,
++                                   ccnt_t array[num]);
+ 
+ /**
+  * @param ncols    size of the 1st dimension of array.
+diff --git a/apps/sel4bench/src/signal.c b/apps/sel4bench/src/signal.c
+index baaf71d..1a9d800 100644
+--- a/apps/sel4bench/src/signal.c
++++ b/apps/sel4bench/src/signal.c
+@@ -36,8 +36,8 @@ static json_t *signal_process(void *results)
+     desc.overhead = result.min;
+ 
+ #if defined CONFIG_APP_SIGNAL_EARLYPROC
+-    result = process_result_early_proc(raw_results->lo_num, raw_results->lo_min,
+-                                       raw_results->lo_max, raw_results->lo_sum, raw_results->lo_sum2,
++    result = process_result_early_proc(raw_results->lo_num,
++                                       raw_results->lo_sum, raw_results->lo_sum2,
+                                        raw_results->lo_prio_results);
+ #else
+     result = process_result(N_RUNS, raw_results->lo_prio_results, desc);
+diff --git a/apps/signal/src/main.c b/apps/signal/src/main.c
+index 7dcd767..2be2105 100644
+--- a/apps/signal/src/main.c
++++ b/apps/signal/src/main.c
+@@ -85,30 +85,17 @@ void low_prio_signal_fn(int argc, char **argv)
+ 
+ /* The same as low_prio_signal_fn, but implements
+  * early processing of samples ("Early processing methodology")
+-
+- * The methodology calculates min and max, as well as accumulates
+- * sum of samples and sum of squared samples. Raw sample values are dropped.
++ *
++ * The methodology accumulates sum of samples and sum of squared samples
++ * that allows to calculate standard deviation and mean.
++ * Raw samples are dropped.
+  */
+ 
+ /* Implementation note.
+- * "Runs Bitmask" is used to select which measured values will be ignored
+- * and which will be "counted".
+-
+- * Use of a bitmask allows to avoid conditional branches inside the
+- * measurement loop which is critical to avoid instruction cache misses.
+-
+- * The first N_IGNORED samples (so called warm-up samples) are not registered,
+- * corresponding mask bits are set to zeros. The following samples, up to
+- * (N_RUNS-1)th, have their mask bits set to "ones".
+-
+- * TODO: to add check of N_RUNS and N_IGNORED values (selbenchsupport/signal.h)
+- * so they match the bitmask capacity: currently N_RUNS + N_IGNORED
+- * should not exceed 512 loops (64 bytes)
++ * Variable "is_counted" indicates whether the sample will be
++ * dropped (as warm-up one) or "counted".
+  */
+ 
+-/* bitmask size in bytes */
+-#define RUNS_BITMASK_BYTES 64
+-
+ void low_prio_signal_early_proc_fn(int argc, char **argv)
+ {
+     assert(argc == N_LO_SIGNAL_ARGS);
+@@ -116,53 +103,29 @@ void low_prio_signal_early_proc_fn(int argc, char **argv)
+     volatile ccnt_t *end = (volatile ccnt_t *) atol(argv[1]);
+     signal_results_t *results = (signal_results_t *) atol(argv[2]);
+     seL4_CPtr done_ep = (seL4_CPtr) atol(argv[3]);
+-    uint8_t runs_bitmask [RUNS_BITMASK_BYTES];
+-
+-
+-    /* Preparing the mask */
+-    memset((void *) runs_bitmask, 0xFF, RUNS_BITMASK_BYTES);
+-
+-    int n_complete_bytes = N_IGNORED / 8;
+-    int n_remained_bits = N_IGNORED % 8;
+-
+-    memset((void *) runs_bitmask, 0, n_complete_bytes);
+-
+-    uint8_t tmp_mask = (1U << n_remained_bits) - 1;
+-    runs_bitmask[n_complete_bytes] &= ~tmp_mask;
+ 
+     /* extract overhead value from the global structure */
+     ccnt_t overhead = results->overhead_min;
+ 
+     ccnt_t sample = 0;
+-    ccnt_t min = -1;
+-    ccnt_t max = 0;
+     ccnt_t sum = 0;
+     ccnt_t sum2 = 0;
+ 
+-    for (int i = 0; i < N_RUNS; i++) {
++    for (seL4_Word i = 0; i < N_RUNS; i++) {
+         ccnt_t start;
++        seL4_Word is_counted;
+ 
+-        /* Cut out a flag bit */
+-        uint8_t is_counted = runs_bitmask[ i / (1U << 3) ] &
+-                             (1U << (i % 8));
+-        is_counted >>= (i % 8);
+-
++        is_counted = (~(i - N_IGNORED)) >> (seL4_WordBits - 1);
+ 
+         SEL4BENCH_READ_CCNT(start);
+         DO_REAL_SIGNAL(ntfn);
+ 
+-        sample = is_counted * ((*end - start) - overhead);
++        sample = is_counted * (*end - start - overhead);
+ 
+-        max = (sample > max) ? sample : max;
+         sum += sample;
+         sum2 += sample * sample;
+-        sample = (is_counted * sample) + (is_counted - 1);
+-        min = (sample < min) ? sample : min;
+-
+     }
+ 
+-    results->lo_max = max;
+-    results->lo_min = min;
+     results->lo_sum = sum;
+     results->lo_sum2 = sum2;
+     results->lo_num = N_RUNS - N_IGNORED;
+@@ -172,6 +135,7 @@ void low_prio_signal_early_proc_fn(int argc, char **argv)
+     /* block */
+     seL4_Wait(ntfn, NULL);
+ }
++
+ #endif /* CONFIG_APP_SIGNAL_EARLYPROC */
+ 
+ void high_prio_signal_fn(int argc, char **argv)
+diff --git a/libsel4benchsupport/include/sel4benchsupport/signal.h b/libsel4benchsupport/include/sel4benchsupport/signal.h
+index f2e93c9..b755844 100644
+--- a/libsel4benchsupport/include/sel4benchsupport/signal.h
++++ b/libsel4benchsupport/include/sel4benchsupport/signal.h
+@@ -13,14 +13,12 @@
+ 
+ typedef struct signal_results {
+     ccnt_t lo_prio_results[N_RUNS];
+-    ccnt_t lo_min;
+-    ccnt_t lo_max;
+-    ccnt_t lo_sum;
+-    ccnt_t lo_sum2;
+-    ccnt_t lo_num; /* number of samples to process */
+-
+     ccnt_t hi_prio_results[N_RUNS];
+     ccnt_t overhead[N_RUNS];
+-    ccnt_t overhead_min;
+     ccnt_t hi_prio_average[N_RUNS][NUM_AVERAGE_EVENTS];
++    /* Parameters intrinsic to early processing */
++    ccnt_t lo_sum; /* sum of samples */
++    ccnt_t lo_sum2; /* sum of squared samples */
++    ccnt_t lo_num; /* number of samples to process */
++    ccnt_t overhead_min; /* min overhead found in "overhead" array */
+ } signal_results_t;
+-- 
+2.34.1
+

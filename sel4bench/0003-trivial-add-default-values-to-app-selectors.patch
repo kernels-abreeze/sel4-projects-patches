@@ -1,0 +1,62 @@
+From f6c63c41393e8e34cfaaf0653e40dac7d0157403 Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Tue, 8 Feb 2022 12:40:00 -0500
+Subject: [PATCH] trivial: add default values to app selectors
+
+It's convenient to have hints about default values of params, originally
+defined in proper app directoties, immediately in the easy-settings
+cmake. It makes faster to retrieve original configuration.
+
+The hints were placed in comments right above the corresponding
+parameters.
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+---
+ easy-settings.cmake | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/easy-settings.cmake b/easy-settings.cmake
+index d8e591c..d3f90d5 100644
+--- a/easy-settings.cmake
++++ b/easy-settings.cmake
+@@ -26,15 +26,37 @@ set(ARM_HYP OFF CACHE BOOL "ARM EL2 hypervisor features on or off")
+ set(MCS OFF CACHE BOOL "MCS kernel")
+ 
+ # Set the list of benchmark applications to be included into the image
++
++# default is OFF
+ set(HARDWARE OFF CACHE BOOL "Application to benchmark hardware-related operations")
++
++# default is OFF
+ set(FAULT OFF CACHE BOOL "Application to benchmark seL4 faults")
++
++# default is OFF
+ set(VCPU OFF CACHE BOOL "Application to benchmark seL4 VCPU performance")
++
++# default is OFF
+ set(SMP OFF CACHE BOOL "Application SMP benchmarks")
++
++# default is ON
+ set(IPC ON CACHE BOOL "Application to benchmark seL4 IPC")
++
+ # see apps/irq/CMakeLists.txt for current state of the benchmark
++# default is OFF
+ set(IRQ OFF CACHE BOOL "Application to benchmark seL4 IRQs from inside the kernel")
++
++# default is ON
+ set(IRQUSER ON CACHE BOOL "Application to benchmark seL4 IRQs")
++
++# default is ON
+ set(SCHED ON CACHE BOOL "Application to benchmark seL4 scheduler")
++
++# default is ON
+ set(SIGNAL ON CACHE BOOL "Application to benchmark seL4 signals")
++
++# default is ON
+ set(MAPPING ON CACHE BOOL "Application to benchmark seL4 mapping a series of pages")
++
++# default is ON
+ set(SYNC ON CACHE BOOL "Application to benchmark seL4 sync")
+-- 
+2.34.1
+

@@ -1,0 +1,28 @@
+From faef5fca4750b7871b4e7503231bb7592dff2c38 Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Wed, 26 Jan 2022 16:16:56 -0500
+Subject: [PATCH] trivial: fix style
+
+fixed
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+---
+ settings.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/settings.cmake b/settings.cmake
+index b8e5fd5..e99ceb9 100644
+--- a/settings.cmake
++++ b/settings.cmake
+@@ -131,7 +131,7 @@ if(NOT Sel4benchAllowSettingsOverride)
+         set(AppIrqBench ON CACHE BOOL "" FORCE)
+     else()
+         set(AppIrqBench OFF CACHE BOOL "" FORCE)
+-     endif()
++    endif()
+ 
+     if(IRQUSER)
+         set(AppIrqUserBench ON CACHE BOOL "" FORCE)
+-- 
+2.34.1
+

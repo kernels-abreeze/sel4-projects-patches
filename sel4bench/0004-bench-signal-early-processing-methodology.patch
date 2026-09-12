@@ -1,0 +1,394 @@
+From 48d372f525ee57ded2f32676793815e5206a388b Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Wed, 13 Apr 2022 14:05:52 -0400
+Subject: [PATCH] bench/signal: early processing methodology
+
+Implementation of "Early Processing" methodology for "Signal to High
+Prio Thread" benchmark.
+
+Benchmarks have to collect considerably large sequence of measurements
+to process them in a later phase. Processing comprises calculation of
+distribution parameters.
+
+Initially introduced methodology sequentially saves the measurements in
+an array. In some cases it may cause D-cache line evictions and
+following D-cache line refills that occur inside the measurement period.
+
+Early processing methodology accumulates four paramaters which necessary
+to calculate mean, variance and standard deviation, during collection
+phase, and drops individual measurements.
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+---
+ apps/sel4bench/src/math.c                     |  43 ++++++
+ apps/sel4bench/src/math.h                     |   6 +
+ apps/sel4bench/src/processing.c               |   6 +
+ apps/sel4bench/src/processing.h               |   4 +
+ apps/sel4bench/src/signal.c                   |   8 +
+ apps/signal/CMakeLists.txt                    |   8 +
+ apps/signal/src/main.c                        | 143 ++++++++++++++++++
+ easy-settings.cmake                           |   4 +
+ .../include/sel4benchsupport/signal.h         |   7 +
+ 9 files changed, 229 insertions(+)
+
+diff --git a/apps/sel4bench/src/math.c b/apps/sel4bench/src/math.c
+index 65e9c2c..8fe7305 100644
+--- a/apps/sel4bench/src/math.c
++++ b/apps/sel4bench/src/math.c
+@@ -154,3 +154,46 @@ result_t calculate_results(const size_t n, ccnt_t data[n])
+ 
+     return result;
+ }
++
++
++static double results_variance_early_proc(const size_t n, const ccnt_t sum, const ccnt_t sum2, const ccnt_t mean)
++{
++    long double variance = 0;
++    long double dm = mean, dsum = sum, dsum2 = sum2;
++
++    /* sigma = ( sum(x^2) - 2m*sum(x) + n*m^2 ) / n */
++
++    variance = (dsum2 - 2 * dm * dsum + n * dm * dm) / n;
++
++    return variance;
++}
++
++
++/*
++ * received data:
++ * data[0] - min
++ * data[1] - max
++ * data[2] - sum of samples
++ * data[3] - sum of squared samples
++ * array[num] -  raw data array, has to be fed to printing function
++ */
++result_t calculate_results_early_proc(ccnt_t num, ccnt_t min, ccnt_t max, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
++{
++
++    result_t result;
++    result.min = min;
++    result.max = max;
++    assert(result.min <= result.max);
++    result.mean = sum / num;
++    result.variance = results_variance_early_proc(num, sum, sum2, result.mean);
++    result.stddev = sqrt(result.variance * ((double) num / (double)(num - 1.0f)));
++    result.median = 0;
++    result.first_quantile = 0;
++    result.third_quantile = 0;
++    result.mode = 0;
++    result.raw_data = array;
++    result.samples = num;
++
++    return result;
++
++}
+diff --git a/apps/sel4bench/src/math.h b/apps/sel4bench/src/math.h
+index 8d8a6eb..cc5fe16 100644
+--- a/apps/sel4bench/src/math.h
++++ b/apps/sel4bench/src/math.h
+@@ -9,3 +9,9 @@
+ #include "benchmark.h"
+ 
+ result_t calculate_results(const size_t n, ccnt_t data[n]);
++
++result_t calculate_results_early_proc(ccnt_t num, ccnt_t min, ccnt_t max,
++                                      ccnt_t sum, ccnt_t sum2, ccnt_t array[num]);
++
++static double results_variance_early_proc(const size_t n, const ccnt_t sum,
++                                          const ccnt_t sum2, const ccnt_t mean);
+diff --git a/apps/sel4bench/src/processing.c b/apps/sel4bench/src/processing.c
+index 9299e8f..82a6c16 100644
+--- a/apps/sel4bench/src/processing.c
++++ b/apps/sel4bench/src/processing.c
+@@ -63,6 +63,12 @@ result_t process_result(size_t n, ccnt_t array[n], result_desc_t desc)
+     return calculate_results(size, array);
+ }
+ 
++/* For Early Processing configuration */
++result_t process_result_early_proc(ccnt_t num, ccnt_t min, ccnt_t max, ccnt_t sum, ccnt_t sum2, ccnt_t array[num])
++{
++    return calculate_results_early_proc(num, min, max, sum, sum2, array);
++}
++
+ void process_results(size_t ncols, size_t nrows, ccnt_t array[ncols][nrows], result_desc_t desc,
+                      result_t results[ncols])
+ {
+diff --git a/apps/sel4bench/src/processing.h b/apps/sel4bench/src/processing.h
+index 69c994b..d51e9c0 100644
+--- a/apps/sel4bench/src/processing.h
++++ b/apps/sel4bench/src/processing.h
+@@ -17,6 +17,10 @@
+  */
+ result_t process_result(size_t n, ccnt_t array[n], result_desc_t desc);
+ 
++/*  For Early Processing configuration  */
++result_t process_result_early_proc(ccnt_t num, ccnt_t min, ccnt_t max,
++                                   ccnt_t sum, ccnt_t sum2, ccnt_t array[num]);
++
+ /**
+  * @param ncols    size of the 1st dimension of array.
+  * @param nrows    size of the 2nd dimension of the array.
+diff --git a/apps/sel4bench/src/signal.c b/apps/sel4bench/src/signal.c
+index b56f120..baaf71d 100644
+--- a/apps/sel4bench/src/signal.c
++++ b/apps/sel4bench/src/signal.c
+@@ -35,10 +35,18 @@ static json_t *signal_process(void *results)
+     desc.stable = false;
+     desc.overhead = result.min;
+ 
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++    result = process_result_early_proc(raw_results->lo_num, raw_results->lo_min,
++                                       raw_results->lo_max, raw_results->lo_sum, raw_results->lo_sum2,
++                                       raw_results->lo_prio_results);
++#else
+     result = process_result(N_RUNS, raw_results->lo_prio_results, desc);
++#endif
++
+     set.name = "Signal to high prio thread";
+     json_array_append_new(array, result_set_to_json(set));
+ 
++
+     result = process_result(N_RUNS, raw_results->hi_prio_results, desc);
+     set.name = "Signal to low prio thread";
+     json_array_append_new(array, result_set_to_json(set));
+diff --git a/apps/signal/CMakeLists.txt b/apps/signal/CMakeLists.txt
+index 9565085..83850c5 100644
+--- a/apps/signal/CMakeLists.txt
++++ b/apps/signal/CMakeLists.txt
+@@ -18,6 +18,14 @@ config_option(
+     DEPENDS
+     "DefaultBenchDeps"
+ )
++config_option(
++    AppSignalEarlyProcessing
++    APP_SIGNAL_EARLYPROC
++    "Apply early processing of the raw results for Signal benchmark"
++    DEFAULT
++    OFF
++)
++
+ add_config_library(sel4benchsignal "${configure_string}")
+ 
+ file(GLOB deps src/*.c)
+diff --git a/apps/signal/src/main.c b/apps/signal/src/main.c
+index e8faf83..7dcd767 100644
+--- a/apps/signal/src/main.c
++++ b/apps/signal/src/main.c
+@@ -81,6 +81,99 @@ void low_prio_signal_fn(int argc, char **argv)
+     seL4_Wait(ntfn, NULL);
+ }
+ 
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++
++/* The same as low_prio_signal_fn, but implements
++ * early processing of samples ("Early processing methodology")
++
++ * The methodology calculates min and max, as well as accumulates
++ * sum of samples and sum of squared samples. Raw sample values are dropped.
++ */
++
++/* Implementation note.
++ * "Runs Bitmask" is used to select which measured values will be ignored
++ * and which will be "counted".
++
++ * Use of a bitmask allows to avoid conditional branches inside the
++ * measurement loop which is critical to avoid instruction cache misses.
++
++ * The first N_IGNORED samples (so called warm-up samples) are not registered,
++ * corresponding mask bits are set to zeros. The following samples, up to
++ * (N_RUNS-1)th, have their mask bits set to "ones".
++
++ * TODO: to add check of N_RUNS and N_IGNORED values (selbenchsupport/signal.h)
++ * so they match the bitmask capacity: currently N_RUNS + N_IGNORED
++ * should not exceed 512 loops (64 bytes)
++ */
++
++/* bitmask size in bytes */
++#define RUNS_BITMASK_BYTES 64
++
++void low_prio_signal_early_proc_fn(int argc, char **argv)
++{
++    assert(argc == N_LO_SIGNAL_ARGS);
++    seL4_CPtr ntfn = (seL4_CPtr) atol(argv[0]);
++    volatile ccnt_t *end = (volatile ccnt_t *) atol(argv[1]);
++    signal_results_t *results = (signal_results_t *) atol(argv[2]);
++    seL4_CPtr done_ep = (seL4_CPtr) atol(argv[3]);
++    uint8_t runs_bitmask [RUNS_BITMASK_BYTES];
++
++
++    /* Preparing the mask */
++    memset((void *) runs_bitmask, 0xFF, RUNS_BITMASK_BYTES);
++
++    int n_complete_bytes = N_IGNORED / 8;
++    int n_remained_bits = N_IGNORED % 8;
++
++    memset((void *) runs_bitmask, 0, n_complete_bytes);
++
++    uint8_t tmp_mask = (1U << n_remained_bits) - 1;
++    runs_bitmask[n_complete_bytes] &= ~tmp_mask;
++
++    /* extract overhead value from the global structure */
++    ccnt_t overhead = results->overhead_min;
++
++    ccnt_t sample = 0;
++    ccnt_t min = -1;
++    ccnt_t max = 0;
++    ccnt_t sum = 0;
++    ccnt_t sum2 = 0;
++
++    for (int i = 0; i < N_RUNS; i++) {
++        ccnt_t start;
++
++        /* Cut out a flag bit */
++        uint8_t is_counted = runs_bitmask[ i / (1U << 3) ] &
++                             (1U << (i % 8));
++        is_counted >>= (i % 8);
++
++
++        SEL4BENCH_READ_CCNT(start);
++        DO_REAL_SIGNAL(ntfn);
++
++        sample = is_counted * ((*end - start) - overhead);
++
++        max = (sample > max) ? sample : max;
++        sum += sample;
++        sum2 += sample * sample;
++        sample = (is_counted * sample) + (is_counted - 1);
++        min = (sample < min) ? sample : min;
++
++    }
++
++    results->lo_max = max;
++    results->lo_min = min;
++    results->lo_sum = sum;
++    results->lo_sum2 = sum2;
++    results->lo_num = N_RUNS - N_IGNORED;
++
++    /* signal completion */
++    seL4_Send(done_ep, seL4_MessageInfo_new(0, 0, 0, 0));
++    /* block */
++    seL4_Wait(ntfn, NULL);
++}
++#endif /* CONFIG_APP_SIGNAL_EARLYPROC */
++
+ void high_prio_signal_fn(int argc, char **argv)
+ {
+     assert(argc == N_HI_SIGNAL_ARGS);
+@@ -155,10 +248,17 @@ static void benchmark(env_t *env, seL4_CPtr ep, seL4_CPtr ntfn, signal_results_t
+         .fn = (sel4utils_thread_entry_fn) wait_fn,
+     };
+ 
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++    helper_thread_t signal = {
++        .argc = N_LO_SIGNAL_ARGS,
++        .fn = (sel4utils_thread_entry_fn) low_prio_signal_early_proc_fn,
++    };
++#else
+     helper_thread_t signal = {
+         .argc = N_LO_SIGNAL_ARGS,
+         .fn = (sel4utils_thread_entry_fn) low_prio_signal_fn,
+     };
++#endif
+ 
+     ccnt_t end;
+     UNUSED int error;
+@@ -170,8 +270,15 @@ static void benchmark(env_t *env, seL4_CPtr ep, seL4_CPtr ntfn, signal_results_t
+     benchmark_configure_thread(env, ep, seL4_MaxPrio - 1, "signal", &signal.thread);
+ 
+     sel4utils_create_word_args(wait.argv_strings, wait.argv, wait.argc, ntfn, ep, (seL4_Word) &end);
++
++
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++    sel4utils_create_word_args(signal.argv_strings, signal.argv, signal.argc, ntfn,
++                               (seL4_Word) &end, (seL4_Word) results, ep);
++#else
+     sel4utils_create_word_args(signal.argv_strings, signal.argv, signal.argc, ntfn,
+                                (seL4_Word) &end, (seL4_Word) results->lo_prio_results, ep);
++#endif
+ 
+     start_threads(&signal, &wait);
+ 
+@@ -214,6 +321,28 @@ void measure_signal_overhead(seL4_CPtr ntfn, ccnt_t *results)
+     }
+ }
+ 
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++
++/*
++ * Execution flow for Early Processing: we have to calculate Min value
++ * of measured overhead before running Signal benchmark.
++ *
++ * In "Late Processing" flow all the data are processed
++ * after all the benchmarks has finished.
++ */
++ccnt_t getMinOverhead(ccnt_t overhead[N_RUNS])
++{
++    ccnt_t min = -1;
++
++    for (int i = 0; i < N_RUNS; i++) {
++        min = (overhead[i] < min) ? overhead[i] : min;
++    }
++
++    return min;
++}
++
++#endif /* CONFIG_APP_SIGNAL_EARLYPROC */
++
+ static env_t *env;
+ 
+ void CONSTRUCTOR(MUSLCSYS_WITH_VSYSCALL_PRIORITY) init_env(void)
+@@ -256,6 +385,20 @@ int main(int argc, char **argv)
+     /* measure overhead */
+     measure_signal_overhead(ntfn.cptr, results->overhead);
+ 
++#if defined CONFIG_APP_SIGNAL_EARLYPROC
++
++    /* TODO: integrate checking stability of the overhead.
++     * Currently (04.06.2022) only x86_64 platform has unstable overhead and it's allowed,
++     * so we just blindly subtract "Min" overhead from all the measurements.
++     *
++     * Original workflow (late processing) has param "stable" in structure
++     * result_desc_t and CONFIG_ALLOW_UNSTABLE_OVERHEAD to deal with overhead.
++     * NB! CONFIG_ALLOW_UNSTABLE_OVERHEAD is not avail. in signal app.
++    */
++    results->overhead_min = getMinOverhead(results->overhead);
++
++#endif /* CONFIG_APP_SIGNAL_EARLYPROC */
++
+     benchmark(env, done_ep.cptr, ntfn.cptr, results);
+ 
+     /* done -> results are stored in shared memory so we can now return */
+diff --git a/easy-settings.cmake b/easy-settings.cmake
+index 5403f28..e9d7c48 100644
+--- a/easy-settings.cmake
++++ b/easy-settings.cmake
+@@ -61,3 +61,7 @@ set(MAPPING ON CACHE BOOL "Application to benchmark seL4 mapping a series of pag
+ 
+ # default is ON
+ set(SYNC ON CACHE BOOL "Application to benchmark seL4 sync")
++
++# Allow Early Processing methodology for
++#Signal/"Signal to High Prio Thread" benchmark
++#set(AppSignalEarlyProcessing ON)
+diff --git a/libsel4benchsupport/include/sel4benchsupport/signal.h b/libsel4benchsupport/include/sel4benchsupport/signal.h
+index 680d827..f2e93c9 100644
+--- a/libsel4benchsupport/include/sel4benchsupport/signal.h
++++ b/libsel4benchsupport/include/sel4benchsupport/signal.h
+@@ -13,7 +13,14 @@
+ 
+ typedef struct signal_results {
+     ccnt_t lo_prio_results[N_RUNS];
++    ccnt_t lo_min;
++    ccnt_t lo_max;
++    ccnt_t lo_sum;
++    ccnt_t lo_sum2;
++    ccnt_t lo_num; /* number of samples to process */
++
+     ccnt_t hi_prio_results[N_RUNS];
+     ccnt_t overhead[N_RUNS];
++    ccnt_t overhead_min;
+     ccnt_t hi_prio_average[N_RUNS][NUM_AVERAGE_EVENTS];
+ } signal_results_t;
+-- 
+2.34.1
+

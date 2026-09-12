@@ -1,0 +1,105 @@
+From 756a37b7d3c07de927fad58a25f907190c2b9232 Mon Sep 17 00:00:00 2001
+From: Nataliya Korovkina <malus.brandywine@gmail.com>
+Date: Tue, 29 Mar 2022 17:41:16 -0400
+Subject: [PATCH] benchmark: config opt. name to enable log buffer
+
+The latest code updates introduced CONFIG_ENABLE_KERNEL_LOG_BUFFER
+meanwhile other code and config.cmake keeps using
+CONFIG_KERNEL_LOG_BUFFER
+
+Signed-off-by: Nataliya Korovkina <malus.brandywine@gmail.com>
+---
+ include/benchmark/benchmark.h |  4 ++--
+ src/api/syscall.c             |  4 ++--
+ src/benchmark/benchmark.c     | 12 ++++++------
+ 3 files changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/include/benchmark/benchmark.h b/include/benchmark/benchmark.h
+index 63a468946..f20561cdf 100644
+--- a/include/benchmark/benchmark.h
++++ b/include/benchmark/benchmark.h
+@@ -18,9 +18,9 @@
+ exception_t handle_SysBenchmarkFlushCaches(void);
+ exception_t handle_SysBenchmarkResetLog(void);
+ exception_t handle_SysBenchmarkFinalizeLog(void);
+-#ifdef CONFIG_ENABLE_KERNEL_LOG_BUFFER
++#ifdef CONFIG_KERNEL_LOG_BUFFER
+ exception_t handle_SysBenchmarkSetLogBuffer(void);
+-#endif /* CONFIG_ENABLE_KERNEL_LOG_BUFFER */
++#endif /* CONFIG_KERNEL_LOG_BUFFER */
+ #ifdef CONFIG_BENCHMARK_TRACK_UTILISATION
+ exception_t handle_SysBenchmarkGetThreadUtilisation(void);
+ exception_t handle_SysBenchmarkResetThreadUtilisation(void);
+diff --git a/src/api/syscall.c b/src/api/syscall.c
+index b84eb385a..40f6f0690 100644
+--- a/src/api/syscall.c
++++ b/src/api/syscall.c
+@@ -181,10 +181,10 @@ exception_t handleUnknownSyscall(word_t w)
+         return handle_SysBenchmarkResetLog();
+     case SysBenchmarkFinalizeLog:
+         return handle_SysBenchmarkFinalizeLog();
+-#ifdef CONFIG_ENABLE_KERNEL_LOG_BUFFER
++#ifdef CONFIG_KERNEL_LOG_BUFFER
+     case SysBenchmarkSetLogBuffer:
+         return handle_SysBenchmarkSetLogBuffer();
+-#endif /* CONFIG_ENABLE_KERNEL_LOG_BUFFER */
++#endif /* CONFIG_KERNEL_LOG_BUFFER */
+ #ifdef CONFIG_BENCHMARK_TRACK_UTILISATION
+     case SysBenchmarkGetThreadUtilisation:
+         return handle_SysBenchmarkGetThreadUtilisation();
+diff --git a/src/benchmark/benchmark.c b/src/benchmark/benchmark.c
+index 49f63244c..c4ba2fef3 100644
+--- a/src/benchmark/benchmark.c
++++ b/src/benchmark/benchmark.c
+@@ -31,7 +31,7 @@ exception_t handle_SysBenchmarkFlushCaches(void)
+ 
+ exception_t handle_SysBenchmarkResetLog(void)
+ {
+-#ifdef CONFIG_ENABLE_KERNEL_LOG_BUFFER
++#ifdef CONFIG_KERNEL_LOG_BUFFER
+     if (ksUserLogBuffer == 0) {
+         userError("A user-level buffer has to be set before resetting benchmark.\
+                 Use seL4_BenchmarkSetLogBuffer\n");
+@@ -40,7 +40,7 @@ exception_t handle_SysBenchmarkResetLog(void)
+     }
+ 
+     ksLogIndex = 0;
+-#endif /* CONFIG_ENABLE_KERNEL_LOG_BUFFER */
++#endif /* CONFIG_KERNEL_LOG_BUFFER */
+ 
+ #ifdef CONFIG_BENCHMARK_TRACK_UTILISATION
+     NODE_STATE(benchmark_log_utilisation_enabled) = true;
+@@ -60,10 +60,10 @@ exception_t handle_SysBenchmarkResetLog(void)
+ 
+ exception_t handle_SysBenchmarkFinalizeLog(void)
+ {
+-#ifdef CONFIG_ENABLE_KERNEL_LOG_BUFFER
++#ifdef CONFIG_KERNEL_LOG_BUFFER
+     ksLogIndexFinalized = ksLogIndex;
+     setRegister(NODE_STATE(ksCurThread), capRegister, ksLogIndexFinalized);
+-#endif /* CONFIG_ENABLE_KERNEL_LOG_BUFFER */
++#endif /* CONFIG_KERNEL_LOG_BUFFER */
+ 
+ #ifdef CONFIG_BENCHMARK_TRACK_UTILISATION
+     benchmark_utilisation_finalise();
+@@ -72,7 +72,7 @@ exception_t handle_SysBenchmarkFinalizeLog(void)
+     return EXCEPTION_NONE;
+ }
+ 
+-#ifdef CONFIG_ENABLE_KERNEL_LOG_BUFFER
++#ifdef CONFIG_KERNEL_LOG_BUFFER
+ exception_t handle_SysBenchmarkSetLogBuffer(void)
+ {
+     word_t cptr_userFrame = getRegister(NODE_STATE(ksCurThread), capRegister);
+@@ -84,7 +84,7 @@ exception_t handle_SysBenchmarkSetLogBuffer(void)
+     setRegister(NODE_STATE(ksCurThread), capRegister, seL4_NoError);
+     return EXCEPTION_NONE;
+ }
+-#endif /* CONFIG_ENABLE_KERNEL_LOG_BUFFER */
++#endif /* CONFIG_KERNEL_LOG_BUFFER */
+ 
+ #ifdef CONFIG_BENCHMARK_TRACK_UTILISATION
+ 
+-- 
+2.34.1
+
